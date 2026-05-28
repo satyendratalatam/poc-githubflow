@@ -1,0 +1,14 @@
+target/
+.idea/
+*.iml
+.vscode/
+*.class
+*.jar
+*.war
+*.ear
+.DS_Store
+*.log
+*.swp
+.mvn/
+mvnw
+mvnw.cmd
