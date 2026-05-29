@@ -30,4 +30,6 @@ jobs:
           if-no-files-found: error
 
       - name: Print JAR size
-        run: ls -lh target/*.jar | awk '{print "JAR size: " $5 " " $9}'
+        run: |
+          ls -lh target/*.jar | awk '{print "JAR size: " $5 " " $9}'
+
