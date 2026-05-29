@@ -1,0 +1,23 @@
+name: Deploy Main to Shared Pipeline
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Pipeline promotion
+        run: echo "Deploying main → INT → QA → UAT → PROD (shared pipeline)"
+
+      - name: Feature flag states
+        run: |
+          echo "Current feature flag states (from application.yml):"
+          echo "  features.customer-search-enabled: false"
+          echo "  features.payment-audit-enabled:   false"
+          echo "  features.platform-v2-enabled:     false"
+
+      - name: Flag safety warning
+        run: echo "WARNING: Main contains all in-flight features (flagged on/off). Verify flag states before PROD release."
