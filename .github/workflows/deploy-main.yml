@@ -20,4 +20,5 @@ jobs:
           echo "  features.platform-v2-enabled:     false"
 
       - name: Flag safety warning
-        run: echo "WARNING: Main contains all in-flight features (flagged on/off). Verify flag states before PROD release."
+        run: |
+          echo "WARNING: Main contains all in-flight features (flagged on/off). Verify flag states before PROD release."
