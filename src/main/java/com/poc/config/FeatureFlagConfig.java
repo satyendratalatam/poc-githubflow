@@ -7,7 +7,7 @@ import org.springframework.stereotype.Component;
 @ConfigurationProperties(prefix = "features")
 public class FeatureFlagConfig {
 
-    private boolean customerSearchEnabled = false;
+    private boolean customerSearchEnabled = true;
     private boolean paymentAuditEnabled = false;
     private boolean platformV2Enabled = false;
 
