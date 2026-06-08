@@ -1,24 +1,97 @@
-name: Deploy Main to Shared Pipeline
+name: Deploy to Environment
 
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - DEV1
+          - DEV2
+          - TST1
+          - TST2
+          - UAT
+          - PREPROD
+          - PRD
+      ref:
+        description: 'Branch or tag to deploy (default: current branch)'
+        required: false
+        default: ''
 
 jobs:
   deploy:
+    name: Deploy → ${{ github.event.inputs.environment }}
     runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
 
     steps:
-      - name: Pipeline promotion
-        run: echo "Deploying main → INT → QA → UAT → PROD (shared pipeline)"
+      - name: Resolve ref
+        id: ref
+        run: |
+          REF="${{ github.event.inputs.ref }}"
+          if [ -z "$REF" ]; then
+            REF="${{ github.ref_name }}"
+          fi
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
 
-      - name: Feature flag states
+      - name: PRD branch guard
+        if: github.event.inputs.environment == 'PRD' || github.event.inputs.environment == 'PREPROD'
+        run: |
+          REF="${{ steps.ref.outputs.ref }}"
+          if [ "$REF" != "main" ]; then
+            echo "::error::PRD and PREPROD deployments must run from 'main'. Got: $REF"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.ref.outputs.ref }}
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+
+      - name: Build (skip tests — CI already ran them)
+        run: mvn clean package -DskipTests
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: customer-order-service-${{ github.event.inputs.environment }}-${{ github.run_number }}
+          path: target/*.jar
+          if-no-files-found: error
+
+      - name: Deploy
+        run: |
+          echo "========================================"
+          echo "  Deploying customer-order-service"
+          echo "  Environment : ${{ github.event.inputs.environment }}"
+          echo "  Ref         : ${{ steps.ref.outputs.ref }}"
+          echo "  Commit      : ${{ github.sha }}"
+          echo "  Run #       : ${{ github.run_number }}"
+          echo "========================================"
+          # Replace the lines below with your real deploy commands,
+          # e.g. kubectl apply, helm upgrade, SSH deploy script, etc.
+          echo "Deploy command for ${{ github.event.inputs.environment }} would run here."
+
+      - name: Feature flag state
         run: |
           echo "Current feature flag states (from application.yml):"
           echo "  features.customer-search-enabled: false"
           echo "  features.payment-audit-enabled:   false"
           echo "  features.platform-v2-enabled:     false"
 
-      - name: Flag safety warning
+      - name: Summary
         run: |
-          echo "WARNING: Main contains all in-flight features (flagged on/off). Verify flag states before PROD release."
+          echo "### Deployment complete :rocket:" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Field | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Environment | \`${{ github.event.inputs.environment }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Ref | \`${{ steps.ref.outputs.ref }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Commit | \`${{ github.sha }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Run | \`#${{ github.run_number }}\` |" >> "$GITHUB_STEP_SUMMARY"
