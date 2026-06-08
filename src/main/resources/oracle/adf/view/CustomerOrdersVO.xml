@@ -1,0 +1,609 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  Oracle ADF View Object: CustomerOrdersVO
+  Base definition — do NOT modify directly.
+  All feature additions must be gated with a FEATURE_FLAG block (see below).
+
+  FEATURE FLAG CONVENTION:
+    Enabled  feature → uncomment the block, set enabled="true"
+    Disabled feature → keep block commented out OR set enabled="false"
+
+  Active flags in this file:
+    FF_LOYALTY_TIER          = false   (loyalty tier column — in development)
+    FF_BULK_DISCOUNT         = false   (bulk discount calculation — planned)
+    FF_REALTIME_INVENTORY    = false   (live inventory join — performance review pending)
+    FF_ORDER_ANALYTICS       = false   (analytics sub-query — data team sign-off needed)
+-->
+<ViewObject
+  xmlns="http://xmlns.oracle.com/bc4j"
+  Name="CustomerOrdersVO"
+  Version="12.1.3.0.0"
+  InheritPersonalization="merge"
+  BindingStyle="OracleName"
+  CustomQuery="false"
+  PageIterMode="Full"
+  UseGlueCode="false"
+  ComponentClass="oracle.jbo.server.ViewObjectImpl"
+  RowClass="model.CustomerOrdersVORowImpl"
+  RowImplName="model.CustomerOrdersVORowImpl"
+  DefClass="model.CustomerOrdersVODefImpl">
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       BASE SQL QUERY
+       Core join: customers → orders → order_lines → products
+       Changes to this block require DBA review + migration ticket.
+       ═══════════════════════════════════════════════════════════════ -->
+  <SQLQuery><![CDATA[
+    SELECT
+      c.customer_id,
+      c.first_name,
+      c.last_name,
+      c.email,
+      c.customer_segment,
+      o.order_id,
+      o.order_date,
+      o.status          AS order_status,
+      o.total_amount,
+      o.currency_code,
+      ol.line_id,
+      ol.product_id,
+      ol.quantity,
+      ol.unit_price,
+      ol.line_total,
+      p.product_name,
+      p.category_code
+
+      /* ── FF_LOYALTY_TIER ─────────────────────────────────────────
+         Feature: Show customer loyalty tier alongside each order.
+         Status : DISABLED — loyalty_tiers table not yet promoted to PROD.
+         Branch : feature/loyalty-tier-display
+         Ticket : ORD-412
+         ─────────────────────────────────────────────────────────────
+      , lt.tier_name    AS loyalty_tier
+      , lt.discount_pct AS loyalty_discount
+         ─────────────────────────────────────────────────── END FF ── */
+
+      /* ── FF_BULK_DISCOUNT ────────────────────────────────────────
+         Feature: Compute bulk-discount at query level for reporting.
+         Status : DISABLED — business rules still under review.
+         Branch : feature/bulk-discount-engine
+         Ticket : ORD-489
+         ─────────────────────────────────────────────────────────────
+      , CASE
+          WHEN ol.quantity >= 100 THEN ol.line_total * 0.85
+          WHEN ol.quantity >=  50 THEN ol.line_total * 0.90
+          WHEN ol.quantity >=  10 THEN ol.line_total * 0.95
+          ELSE ol.line_total
+        END              AS discounted_total
+         ─────────────────────────────────────────────────── END FF ── */
+
+      /* ── FF_ORDER_ANALYTICS ──────────────────────────────────────
+         Feature: Inline analytics — running total and rank per customer.
+         Status : DISABLED — data team sign-off on window function cost needed.
+         Branch : feature/order-analytics-view
+         Ticket : ORD-521
+         ─────────────────────────────────────────────────────────────
+      , SUM(o.total_amount)
+          OVER (PARTITION BY c.customer_id ORDER BY o.order_date)
+                         AS running_total
+      , RANK()
+          OVER (PARTITION BY c.customer_id ORDER BY o.total_amount DESC)
+                         AS order_rank
+         ─────────────────────────────────────────────────── END FF ── */
+
+    FROM   customers        c
+    JOIN   orders           o  ON o.customer_id  = c.customer_id
+    JOIN   order_lines      ol ON ol.order_id    = o.order_id
+    JOIN   products         p  ON p.product_id   = ol.product_id
+
+    /* ── FF_LOYALTY_TIER (JOIN) ──────────────────────────────────
+       Must be uncommented together with the SELECT columns above.
+       ─────────────────────────────────────────────────────────────
+    LEFT JOIN loyalty_tiers lt ON lt.customer_id = c.customer_id
+       ─────────────────────────────────────────────────── END FF ── */
+
+    /* ── FF_REALTIME_INVENTORY (JOIN) ────────────────────────────
+       Feature: Live inventory count per product on each order line.
+       Status : DISABLED — full-table join flagged in perf review.
+       Branch : feature/realtime-inventory-join
+       Ticket : ORD-503
+       ───────────────────────────────────────────────────────────
+    JOIN inventory_snapshots inv
+         ON  inv.product_id   = ol.product_id
+         AND inv.snapshot_ts  = (
+               SELECT MAX(snapshot_ts)
+               FROM   inventory_snapshots
+               WHERE  product_id = ol.product_id
+             )
+       ─────────────────────────────────────────────────── END FF ── */
+
+    WHERE  o.status != 'CANCELLED'
+    ORDER  BY c.customer_id, o.order_date DESC
+  ]]></SQLQuery>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       BASE VIEW ATTRIBUTES
+       ═══════════════════════════════════════════════════════════════ -->
+
+  <ViewAttribute
+    Name="CustomerId"
+    IsNotNull="true"
+    PrecisionRule="true"
+    EntityAttrName="CustomerId"
+    EntityUsage="CustomerUsage"
+    AliasName="CUSTOMER_ID"
+    Type="oracle.jbo.domain.Number"
+    ColumnType="NUMBER"
+    sqlType="NUMERIC"
+    Column="c.customer_id"
+    Precision="10"
+    Scale="0"/>
+
+  <ViewAttribute
+    Name="FirstName"
+    PrecisionRule="true"
+    EntityAttrName="FirstName"
+    EntityUsage="CustomerUsage"
+    AliasName="FIRST_NAME"
+    Type="java.lang.String"
+    ColumnType="VARCHAR2"
+    sqlType="VARCHAR"
+    Column="c.first_name"
+    Precision="100"/>
+
+  <ViewAttribute
+    Name="LastName"
+    PrecisionRule="true"
+    EntityAttrName="LastName"
+    EntityUsage="CustomerUsage"
+    AliasName="LAST_NAME"
+    Type="java.lang.String"
+    ColumnType="VARCHAR2"
+    sqlType="VARCHAR"
+    Column="c.last_name"
+    Precision="100"/>
+
+  <ViewAttribute
+    Name="Email"
+    PrecisionRule="true"
+    EntityAttrName="Email"
+    EntityUsage="CustomerUsage"
+    AliasName="EMAIL"
+    Type="java.lang.String"
+    ColumnType="VARCHAR2"
+    sqlType="VARCHAR"
+    Column="c.email"
+    Precision="255"/>
+
+  <ViewAttribute
+    Name="CustomerSegment"
+    PrecisionRule="true"
+    EntityAttrName="CustomerSegment"
+    EntityUsage="CustomerUsage"
+    AliasName="CUSTOMER_SEGMENT"
+    Type="java.lang.String"
+    ColumnType="VARCHAR2"
+    sqlType="VARCHAR"
+    Column="c.customer_segment"
+    Precision="50"/>
+
+  <ViewAttribute
+    Name="OrderId"
+    IsNotNull="true"
+    PrecisionRule="true"
+    EntityAttrName="OrderId"
+    EntityUsage="OrderUsage"
+    AliasName="ORDER_ID"
+    Type="oracle.jbo.domain.Number"
+    ColumnType="NUMBER"
+    sqlType="NUMERIC"
+    Column="o.order_id"
+    Precision="10"
+    Scale="0"/>
+
+  <ViewAttribute
+    Name="OrderDate"
+    PrecisionRule="true"
+    EntityAttrName="OrderDate"
+    EntityUsage="OrderUsage"
+    AliasName="ORDER_DATE"
+    Type="oracle.jbo.domain.Date"
+    ColumnType="DATE"
+    sqlType="DATE"
+    Column="o.order_date"/>
+
+  <ViewAttribute
+    Name="OrderStatus"
+    PrecisionRule="true"
+    EntityAttrName="Status"
+    EntityUsage="OrderUsage"
+    AliasName="ORDER_STATUS"
+    Type="java.lang.String"
+    ColumnType="VARCHAR2"
+    sqlType="VARCHAR"
+    Column="o.status"
+    Precision="30"/>
+
+  <ViewAttribute
+    Name="TotalAmount"
+    PrecisionRule="true"
+    EntityAttrName="TotalAmount"
+    EntityUsage="OrderUsage"
+    AliasName="TOTAL_AMOUNT"
+    Type="oracle.jbo.domain.Number"
+    ColumnType="NUMBER"
+    sqlType="NUMERIC"
+    Column="o.total_amount"
+    Precision="18"
+    Scale="2"/>
+
+  <ViewAttribute
+    Name="CurrencyCode"
+    PrecisionRule="true"
+    EntityAttrName="CurrencyCode"
+    EntityUsage="OrderUsage"
+    AliasName="CURRENCY_CODE"
+    Type="java.lang.String"
+    ColumnType="VARCHAR2"
+    sqlType="VARCHAR"
+    Column="o.currency_code"
+    Precision="3"/>
+
+  <ViewAttribute
+    Name="LineId"
+    IsNotNull="true"
+    PrecisionRule="true"
+    EntityAttrName="LineId"
+    EntityUsage="OrderLineUsage"
+    AliasName="LINE_ID"
+    Type="oracle.jbo.domain.Number"
+    ColumnType="NUMBER"
+    sqlType="NUMERIC"
+    Column="ol.line_id"
+    Precision="10"
+    Scale="0"/>
+
+  <ViewAttribute
+    Name="ProductId"
+    PrecisionRule="true"
+    EntityAttrName="ProductId"
+    EntityUsage="OrderLineUsage"
+    AliasName="PRODUCT_ID"
+    Type="oracle.jbo.domain.Number"
+    ColumnType="NUMBER"
+    sqlType="NUMERIC"
+    Column="ol.product_id"
+    Precision="10"
+    Scale="0"/>
+
+  <ViewAttribute
+    Name="Quantity"
+    PrecisionRule="true"
+    EntityAttrName="Quantity"
+    EntityUsage="OrderLineUsage"
+    AliasName="QUANTITY"
+    Type="oracle.jbo.domain.Number"
+    ColumnType="NUMBER"
+    sqlType="NUMERIC"
+    Column="ol.quantity"
+    Precision="10"
+    Scale="0"/>
+
+  <ViewAttribute
+    Name="UnitPrice"
+    PrecisionRule="true"
+    EntityAttrName="UnitPrice"
+    EntityUsage="OrderLineUsage"
+    AliasName="UNIT_PRICE"
+    Type="oracle.jbo.domain.Number"
+    ColumnType="NUMBER"
+    sqlType="NUMERIC"
+    Column="ol.unit_price"
+    Precision="18"
+    Scale="2"/>
+
+  <ViewAttribute
+    Name="LineTotal"
+    PrecisionRule="true"
+    EntityAttrName="LineTotal"
+    EntityUsage="OrderLineUsage"
+    AliasName="LINE_TOTAL"
+    Type="oracle.jbo.domain.Number"
+    ColumnType="NUMBER"
+    sqlType="NUMERIC"
+    Column="ol.line_total"
+    Precision="18"
+    Scale="2"/>
+
+  <ViewAttribute
+    Name="ProductName"
+    PrecisionRule="true"
+    EntityAttrName="ProductName"
+    EntityUsage="ProductUsage"
+    AliasName="PRODUCT_NAME"
+    Type="java.lang.String"
+    ColumnType="VARCHAR2"
+    sqlType="VARCHAR"
+    Column="p.product_name"
+    Precision="200"/>
+
+  <ViewAttribute
+    Name="CategoryCode"
+    PrecisionRule="true"
+    EntityAttrName="CategoryCode"
+    EntityUsage="ProductUsage"
+    AliasName="CATEGORY_CODE"
+    Type="java.lang.String"
+    ColumnType="VARCHAR2"
+    sqlType="VARCHAR"
+    Column="p.category_code"
+    Precision="50"/>
+
+  <!-- ── FF_LOYALTY_TIER — ViewAttributes ─────────────────────────
+       Uncomment when FF_LOYALTY_TIER is enabled. Keep in sync with
+       the SQL SELECT block and the JOIN block above.
+       Branch : feature/loyalty-tier-display  |  Ticket: ORD-412
+       ─────────────────────────────────────────────────────────────
+
+  <ViewAttribute
+    Name="LoyaltyTier"
+    IsUpdateable="false"
+    AliasName="LOYALTY_TIER"
+    Type="java.lang.String"
+    ColumnType="VARCHAR2"
+    sqlType="VARCHAR"
+    Column="lt.tier_name"
+    Precision="30"
+    featureFlag="FF_LOYALTY_TIER"/>
+
+  <ViewAttribute
+    Name="LoyaltyDiscount"
+    IsUpdateable="false"
+    AliasName="LOYALTY_DISCOUNT"
+    Type="oracle.jbo.domain.Number"
+    ColumnType="NUMBER"
+    sqlType="NUMERIC"
+    Column="lt.discount_pct"
+    Precision="5"
+    Scale="2"
+    featureFlag="FF_LOYALTY_TIER"/>
+
+       ─────────────────────────────────────────────────── END FF ── -->
+
+  <!-- ── FF_BULK_DISCOUNT — ViewAttribute ─────────────────────────
+       Uncomment when FF_BULK_DISCOUNT is enabled.
+       Branch : feature/bulk-discount-engine  |  Ticket: ORD-489
+       ─────────────────────────────────────────────────────────────
+
+  <ViewAttribute
+    Name="DiscountedTotal"
+    IsUpdateable="false"
+    AliasName="DISCOUNTED_TOTAL"
+    Type="oracle.jbo.domain.Number"
+    ColumnType="NUMBER"
+    sqlType="NUMERIC"
+    Column="DISCOUNTED_TOTAL"
+    Precision="18"
+    Scale="2"
+    featureFlag="FF_BULK_DISCOUNT"/>
+
+       ─────────────────────────────────────────────────── END FF ── -->
+
+  <!-- ── FF_REALTIME_INVENTORY — ViewAttribute ─────────────────────
+       Uncomment when FF_REALTIME_INVENTORY is enabled.
+       Branch : feature/realtime-inventory-join  |  Ticket: ORD-503
+       ─────────────────────────────────────────────────────────────
+
+  <ViewAttribute
+    Name="StockOnHand"
+    IsUpdateable="false"
+    AliasName="STOCK_ON_HAND"
+    Type="oracle.jbo.domain.Number"
+    ColumnType="NUMBER"
+    sqlType="NUMERIC"
+    Column="inv.stock_on_hand"
+    Precision="10"
+    Scale="0"
+    featureFlag="FF_REALTIME_INVENTORY"/>
+
+       ─────────────────────────────────────────────────── END FF ── -->
+
+  <!-- ── FF_ORDER_ANALYTICS — ViewAttributes ───────────────────────
+       Uncomment when FF_ORDER_ANALYTICS is enabled.
+       Branch : feature/order-analytics-view  |  Ticket: ORD-521
+       ─────────────────────────────────────────────────────────────
+
+  <ViewAttribute
+    Name="RunningTotal"
+    IsUpdateable="false"
+    AliasName="RUNNING_TOTAL"
+    Type="oracle.jbo.domain.Number"
+    ColumnType="NUMBER"
+    sqlType="NUMERIC"
+    Column="RUNNING_TOTAL"
+    Precision="18"
+    Scale="2"
+    featureFlag="FF_ORDER_ANALYTICS"/>
+
+  <ViewAttribute
+    Name="OrderRank"
+    IsUpdateable="false"
+    AliasName="ORDER_RANK"
+    Type="oracle.jbo.domain.Number"
+    ColumnType="NUMBER"
+    sqlType="NUMERIC"
+    Column="ORDER_RANK"
+    Precision="5"
+    Scale="0"
+    featureFlag="FF_ORDER_ANALYTICS"/>
+
+       ─────────────────────────────────────────────────── END FF ── -->
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       BASE VIEW CRITERIA
+       ═══════════════════════════════════════════════════════════════ -->
+
+  <ViewCriteria
+    Name="ByCustomerIdVC"
+    ViewObjectName="model.CustomerOrdersVO"
+    Conjunction="AND"
+    Updatable="true"
+    ShowInList="true">
+    <ViewCriteriaRow
+      Name="vcrow0"
+      Conjunction="AND">
+      <ViewCriteriaItem
+        Name="CustomerId"
+        ViewAttribute="CustomerId"
+        Operator="="
+        Conjunction="AND"
+        Value=":pCustomerId"
+        IsBindVarValue="true"/>
+    </ViewCriteriaRow>
+  </ViewCriteria>
+
+  <ViewCriteria
+    Name="ByOrderStatusVC"
+    ViewObjectName="model.CustomerOrdersVO"
+    Conjunction="AND"
+    Updatable="true"
+    ShowInList="true">
+    <ViewCriteriaRow
+      Name="vcrow1"
+      Conjunction="AND">
+      <ViewCriteriaItem
+        Name="OrderStatus"
+        ViewAttribute="OrderStatus"
+        Operator="="
+        Conjunction="AND"
+        Value=":pOrderStatus"
+        IsBindVarValue="true"/>
+    </ViewCriteriaRow>
+  </ViewCriteria>
+
+  <ViewCriteria
+    Name="ByDateRangeVC"
+    ViewObjectName="model.CustomerOrdersVO"
+    Conjunction="AND"
+    Updatable="true"
+    ShowInList="true">
+    <ViewCriteriaRow
+      Name="vcrow2"
+      Conjunction="AND">
+      <ViewCriteriaItem
+        Name="OrderDateFrom"
+        ViewAttribute="OrderDate"
+        Operator=">="
+        Conjunction="AND"
+        Value=":pFromDate"
+        IsBindVarValue="true"/>
+      <ViewCriteriaItem
+        Name="OrderDateTo"
+        ViewAttribute="OrderDate"
+        Operator="&lt;="
+        Conjunction="AND"
+        Value=":pToDate"
+        IsBindVarValue="true"/>
+    </ViewCriteriaRow>
+  </ViewCriteria>
+
+  <!-- ── FF_ORDER_ANALYTICS — ViewCriteria ─────────────────────────
+       Rank-based filter only meaningful when FF_ORDER_ANALYTICS is on.
+       Branch : feature/order-analytics-view  |  Ticket: ORD-521
+       ─────────────────────────────────────────────────────────────
+
+  <ViewCriteria
+    Name="TopNOrdersByCustomerVC"
+    ViewObjectName="model.CustomerOrdersVO"
+    Conjunction="AND"
+    Updatable="true"
+    ShowInList="true"
+    featureFlag="FF_ORDER_ANALYTICS">
+    <ViewCriteriaRow
+      Name="vcrow3"
+      Conjunction="AND">
+      <ViewCriteriaItem
+        Name="OrderRank"
+        ViewAttribute="OrderRank"
+        Operator="&lt;="
+        Conjunction="AND"
+        Value=":pTopN"
+        IsBindVarValue="true"/>
+    </ViewCriteriaRow>
+  </ViewCriteria>
+
+       ─────────────────────────────────────────────────── END FF ── -->
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       BIND VARIABLES
+       ═══════════════════════════════════════════════════════════════ -->
+
+  <Variable
+    Name="pCustomerId"
+    Kind="where"
+    Type="oracle.jbo.domain.Number"/>
+
+  <Variable
+    Name="pOrderStatus"
+    Kind="where"
+    Type="java.lang.String"/>
+
+  <Variable
+    Name="pFromDate"
+    Kind="where"
+    Type="oracle.jbo.domain.Date"/>
+
+  <Variable
+    Name="pToDate"
+    Kind="where"
+    Type="oracle.jbo.domain.Date"/>
+
+  <!-- ── FF_ORDER_ANALYTICS — Bind Variables ───────────────────────
+
+  <Variable
+    Name="pTopN"
+    Kind="where"
+    Type="oracle.jbo.domain.Number"
+    featureFlag="FF_ORDER_ANALYTICS"/>
+
+       ─────────────────────────────────────────────────── END FF ── -->
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       ENTITY USAGES
+       Links this VO to its backing Entity Objects.
+       ═══════════════════════════════════════════════════════════════ -->
+
+  <EntityUsage
+    Name="CustomerUsage"
+    Entity="model.CustomerEO"/>
+
+  <EntityUsage
+    Name="OrderUsage"
+    Entity="model.OrderEO"
+    SourceUsage="CustomerUsage"
+    AssocName="model.CustomerToOrdersAssoc"/>
+
+  <EntityUsage
+    Name="OrderLineUsage"
+    Entity="model.OrderLineEO"
+    SourceUsage="OrderUsage"
+    AssocName="model.OrderToLinesAssoc"/>
+
+  <EntityUsage
+    Name="ProductUsage"
+    Entity="model.ProductEO"
+    SourceUsage="OrderLineUsage"
+    AssocName="model.ProductToLinesAssoc"/>
+
+  <!-- ── FF_LOYALTY_TIER — EntityUsage ─────────────────────────────
+
+  <EntityUsage
+    Name="LoyaltyTierUsage"
+    Entity="model.LoyaltyTierEO"
+    SourceUsage="CustomerUsage"
+    AssocName="model.CustomerToLoyaltyTierAssoc"
+    featureFlag="FF_LOYALTY_TIER"/>
+
+       ─────────────────────────────────────────────────── END FF ── -->
+
+</ViewObject>
